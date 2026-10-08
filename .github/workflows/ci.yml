@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '24'
+
+jobs:
+  quality:
+    name: Lint, typecheck & unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build:shared
+      - run: npm run db:generate
+      - name: Prisma schema validation
+        run: npx prisma validate --schema apps/api/prisma/schema.prisma || (cd apps/api && npx prisma validate)
+      - run: npm run lint
+      - run: npm run typecheck --workspace=@peoplecore/api
+      - run: npm run typecheck --workspace=@peoplecore/mobile
+      - run: npm run test:unit --workspace=@peoplecore/api
+      - run: npm run test --workspace=@peoplecore/web
+
+  e2e:
+    name: API end-to-end tests (embedded PostgreSQL)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build:shared
+      - run: npm run db:generate
+      # The e2e suite runs against an in-process WASM PostgreSQL — no services needed.
+      - run: npm run test:e2e
+      - name: Seed demo data
+        env:
+          DATABASE_DRIVER: pglite
+          PGLITE_DATA_DIR: memory
+        run: npm run db:seed
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-coverage
+          path: apps/api/coverage
+          if-no-files-found: ignore
+
+  build:
+    name: Build web & API
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build:shared
+      - run: npm run db:generate
+      - run: npm run build:api
+      - run: npm run build:web
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: apps/web/dist
+          if-no-files-found: error
+
+  docker:
+    name: Docker images
+    runs-on: ubuntu-latest
+    needs: [quality, build]
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build & push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository }}/api:${{ github.sha }},ghcr.io/${{ github.repository }}/api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build & push web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository }}/web:${{ github.sha }},ghcr.io/${{ github.repository }}/web:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

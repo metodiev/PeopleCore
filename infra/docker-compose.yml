@@ -1,0 +1,158 @@
+# PeopleCore — full local/staging stack.
+#   docker compose -f infra/docker-compose.yml up -d --build
+# The API container applies migrations on start (RUN_MIGRATIONS=true).
+name: peoplecore
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-peoplecore}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-peoplecore}
+      POSTGRES_DB: ${POSTGRES_DB:-peoplecore}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-peoplecore} -d ${POSTGRES_DB:-peoplecore}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes', '--maxmemory', '256mb', '--maxmemory-policy', 'allkeys-lru']
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: ['server', '/data', '--console-address', ':9001']
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-peoplecore}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-peoplecore123}
+    ports:
+      - '${MINIO_PORT:-9000}:9000'
+      - '${MINIO_CONSOLE_PORT:-9001}:9001'
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # Creates the documents bucket once MinIO is up (idempotent). Without this the
+  # first upload would fail with NoSuchBucket.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-peoplecore}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-peoplecore123}
+      S3_BUCKET: ${S3_BUCKET:-peoplecore-documents}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
+        mc mb --ignore-existing "local/$$S3_BUCKET" &&
+        mc anonymous set none "local/$$S3_BUCKET" &&
+        echo "bucket $$S3_BUCKET ready"
+
+  api:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: 4000
+      DATABASE_DRIVER: postgres
+      DATABASE_URL: postgresql://${POSTGRES_USER:-peoplecore}:${POSTGRES_PASSWORD:-peoplecore}@postgres:5432/${POSTGRES_DB:-peoplecore}
+      REDIS_URL: redis://redis:6379
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?set JWT_ACCESS_SECRET in the environment}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?set JWT_REFRESH_SECRET in the environment}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY in the environment}
+      WEB_APP_URL: ${WEB_APP_URL:-http://localhost:8080}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+      MAIL_DRIVER: ${MAIL_DRIVER:-console}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-PeopleCore <no-reply@peoplecore.local>}
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-s3}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-peoplecore-documents}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-peoplecore}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-peoplecore123}
+      S3_FORCE_PATH_STYLE: 'true'
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID:-}
+      MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-}
+      MICROSOFT_TENANT_ID: ${MICROSOFT_TENANT_ID:-common}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      RUN_MIGRATIONS: 'true'
+      RUN_SEED: ${RUN_SEED:-false}
+    ports:
+      - '${API_PORT:-4000}:4000'
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - '${WEB_PORT:-8080}:80'
+
+  # One-shot helpers -----------------------------------------------------------------
+  backup:
+    image: postgres:18-alpine
+    profiles: ['ops']
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-peoplecore}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-peoplecore}
+      PGDATABASE: ${POSTGRES_DB:-peoplecore}
+      BACKUP_DIR: /backups
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+    volumes:
+      - ${BACKUP_HOST_DIR:-./backups}:/backups
+      - ../infra/backup.sh:/usr/local/bin/backup.sh:ro
+    entrypoint: ['/bin/sh', '/usr/local/bin/backup.sh']
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:

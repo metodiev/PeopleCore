@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Generated code (regenerate with `npm run db:generate`)
+apps/api/src/generated/
+
+# Environment
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Test / coverage
+coverage/
+.nyc_output/
+*.lcov
+
+# Local databases & uploads
+.pgdata/
+.data/
+apps/api/storage/
+apps/api/uploads/
+
+# Runtime state written by the scripts/ helpers (PID files, service logs)
+.run/
+
+# Mobile
+apps/mobile/.expo/
+apps/mobile/android/
+apps/mobile/ios/
+expo-env.d.ts
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*.log
+npm-debug.log*
+
+# Tooling scratch space (throwaway spikes, agent caches)
+.scratch/

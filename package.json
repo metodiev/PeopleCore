@@ -1,0 +1,48 @@
+{
+  "name": "peoplecore",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PeopleCore \u2014 multi-tenant HR/ERP SaaS platform (web + mobile + API)",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "postinstall": "npm run build:shared && npm run db:generate",
+    "build": "npm run build --workspaces --if-present",
+    "build:api": "npm run build --workspace=@peoplecore/api",
+    "build:shared": "npm run build --workspace=@peoplecore/shared",
+    "build:web": "npm run build --workspace=@peoplecore/web",
+    "dev:api": "npm run dev --workspace=@peoplecore/api",
+    "dev:web": "npm run dev --workspace=@peoplecore/web",
+    "dev:mobile": "npm run start --workspace=@peoplecore/mobile",
+    "db:generate": "npm run db:generate --workspace=@peoplecore/api",
+    "db:migrate": "npm run db:migrate --workspace=@peoplecore/api",
+    "db:deploy": "npm run db:deploy --workspace=@peoplecore/api",
+    "db:seed": "npm run db:seed --workspace=@peoplecore/api",
+    "db:dev": "npm run db:dev --workspace=@peoplecore/api",
+    "test": "npm run test --workspaces --if-present",
+    "test:unit": "npm run test:unit --workspaces --if-present",
+    "test:e2e": "npm run test:e2e --workspace=@peoplecore/api",
+    "lint": "oxlint apps packages",
+    "api:routes": "node scripts/generate-api-routes.mjs",
+    "format": "prettier --write \"apps/**/*.{ts,tsx,json,css}\" \"packages/**/*.{ts,tsx,json}\" \"*.{json,md,yml}\"",
+    "infra:up": "docker compose -f infra/docker-compose.yml up -d",
+    "infra:down": "docker compose -f infra/docker-compose.yml down",
+    "start": "./scripts/start.sh",
+    "stop": "./scripts/stop.sh",
+    "restart": "./scripts/restart.sh",
+    "mobile:ios": "./scripts/mobile-ios-start.sh",
+    "mobile:ios:stop": "./scripts/mobile-ios-stop.sh",
+    "mobile:android": "./scripts/mobile-android-start.sh",
+    "mobile:android:stop": "./scripts/mobile-android-stop.sh",
+    "lint:scripts": "shellcheck -x scripts/lib/common.sh scripts/*.sh"
+  },
+  "devDependencies": {
+    "oxlint": "^1.58.0",
+    "prettier": "^3.4.2"
+  }
+}
